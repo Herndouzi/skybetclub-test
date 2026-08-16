@@ -503,6 +503,43 @@ function computeAwards(weeks, allSlips, dutyStats, legStats) {
   return { highestOdds, safest, mostCorrect, bestRate, biggestWeek, mostWins };
 }
 
+// A week's overall shape: "won" only if every acca that week won, "lost"
+// only if every acca lost - anything mixed or undecided doesn't count
+// either way for streak purposes.
+function weekOutcome(week) {
+  const statuses = week.slips.map(slipStatus);
+  if (statuses.length && statuses.every((s) => s === "won")) return "won";
+  if (statuses.length && statuses.every((s) => s === "lost")) return "lost";
+  return null;
+}
+
+// Current on-duty streaks per player - consecutive won/lost weeks working
+// backwards from their most recent week, skipping pending/mixed weeks
+// rather than breaking on them.
+function computeStreaks(weeks, rotation) {
+  return rotation
+    .map((player) => {
+      const theirWeeks = weeks.filter((w) => w.player === player);
+      let type = null;
+      let count = 0;
+      for (const w of theirWeeks) {
+        const outcome = weekOutcome(w);
+        if (outcome === null) continue;
+        if (type === null) {
+          type = outcome;
+          count = 1;
+        } else if (outcome === type) {
+          count += 1;
+        } else {
+          break;
+        }
+      }
+      return { name: player, type, count };
+    })
+    .filter((s) => s.count >= 2)
+    .sort((a, b) => b.count - a.count);
+}
+
 // One-line "front page" headline naming the current season leader.
 function seasonHeadline(dutyStats) {
   const active = dutyStats.filter((p) => p.won + p.lost + p.pending > 0);
@@ -610,6 +647,7 @@ function computeSeasonStats(weeks) {
 export default function AccaClub() {
   const [rotation, setRotation] = useState([]);
   const [weeks, setWeeks] = useState([]);
+  const [archivedSeasons, setArchivedSeasons] = useState([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [expanded, setExpanded] = useState({});
@@ -617,11 +655,15 @@ export default function AccaClub() {
   const [showReshuffle, setShowReshuffle] = useState(false);
   const [selectedPlayer, setSelectedPlayer] = useState(null);
   const [showDemo, setShowDemo] = useState(false);
+  const [showFinale, setShowFinale] = useState(false);
+  const [viewingArchived, setViewingArchived] = useState(null);
+  const [showArchiveList, setShowArchiveList] = useState(false);
   const autoCheckRef = useRef(new Set());
 
   const applyIncoming = (parsed, isInitial) => {
     setRotation(parsed.rotation || []);
     setWeeks(parsed.weeks || []);
+    setArchivedSeasons(parsed.archivedSeasons || []);
     if (isInitial) {
       const exp = {};
       if (parsed.weeks && parsed.weeks.length) exp[parsed.weeks[0].id] = true;
@@ -673,11 +715,13 @@ export default function AccaClub() {
     setRefreshing(false);
   };
 
-  const persist = async (nextRotation, nextWeeks) => {
+  const persist = async (nextRotation, nextWeeks, nextArchived) => {
+    const archived = nextArchived !== undefined ? nextArchived : archivedSeasons;
     setRotation(nextRotation);
     setWeeks(nextWeeks);
+    setArchivedSeasons(archived);
     try {
-      await setSeason({ rotation: nextRotation, weeks: nextWeeks });
+      await setSeason({ rotation: nextRotation, weeks: nextWeeks, archivedSeasons: archived });
     } catch (e) {
       console.error("Save failed", e);
     }
@@ -685,6 +729,14 @@ export default function AccaClub() {
 
   const setRotationOnly = (r) => persist(r, weeks);
   const setWeeksOnly = (w) => persist(rotation, w);
+
+  // Archives the current season (keeps its full history) and clears the
+  // board for a new one - unlike Reset season, nothing is thrown away.
+  const archiveAndStartNew = () => {
+    const archived = [...archivedSeasons, { id: uid(), endedAt: Date.now(), rotation, weeks }];
+    persist([], [], archived);
+    setShowFinale(false);
+  };
 
   const nextPlayer = useMemo(() => {
     if (rotation.length === 0) return null;
@@ -802,6 +854,7 @@ export default function AccaClub() {
 
   const { seasonStats, dutyStats, legStats, allSlips } = useMemo(() => computeSeasonStats(weeks), [weeks]);
   const awards = useMemo(() => computeAwards(weeks, allSlips, dutyStats, legStats), [weeks, allSlips, dutyStats, legStats]);
+  const streaks = useMemo(() => computeStreaks(weeks, rotation), [weeks, rotation]);
 
   const doReset = () => {
     persist([], []);
@@ -875,7 +928,11 @@ export default function AccaClub() {
         </div>
       )}
 
-      <SeasonHighlights dutyStats={dutyStats} legStats={legStats} awards={awards} />
+      {weeks.length > 0 && (
+        <SeasonTimeline weeks={weeks} expanded={expanded} onToggleWeek={(id) => setExpanded((e) => ({ ...e, [id]: !e[id] }))} />
+      )}
+
+      <SeasonHighlights dutyStats={dutyStats} legStats={legStats} awards={awards} streaks={streaks} />
 
       <section style={styles.statsStrip}>
         <StatBlock label="Staked" value={fmt(seasonStats.totalStaked)} />
@@ -894,6 +951,16 @@ export default function AccaClub() {
           <Sparkles size={15} /> See a 5-week demo
         </button>
         {weeks.length > 0 && (
+          <button style={styles.ghostBtn} onClick={() => setShowFinale(true)}>
+            <Trophy size={15} /> End season
+          </button>
+        )}
+        {archivedSeasons.length > 0 && (
+          <button style={styles.ghostBtn} onClick={() => setShowArchiveList(true)}>
+            <Calendar size={15} /> Past seasons ({archivedSeasons.length})
+          </button>
+        )}
+        {weeks.length > 0 && (
           <button style={styles.ghostBtn} onClick={() => setShowReset(true)}>
             <RotateCcw size={15} /> Reset season
           </button>
@@ -902,12 +969,19 @@ export default function AccaClub() {
 
       {showReset && (
         <div style={styles.confirmBox}>
-          <span>Wipe every week and the rotation, and start a fresh season?</span>
+          <span>Wipe every week and the rotation, and start a fresh season? Unlike "End season," this doesn't keep any history.</span>
           <div style={{ display: "flex", gap: 8 }}>
             <button style={styles.dangerBtn} onClick={doReset}>Yes, clear it</button>
             <button style={styles.ghostBtn} onClick={() => setShowReset(false)}>Cancel</button>
           </div>
         </div>
+      )}
+
+      {weeks.length > 1 && (
+        <WeeksOverviewTable
+          weeks={weeks}
+          onSelectWeek={(id) => setExpanded((e) => ({ ...e, [id]: true }))}
+        />
       )}
 
       <main style={styles.weeksCol}>
@@ -989,6 +1063,34 @@ export default function AccaClub() {
       )}
 
       {showDemo && <DemoPreview onClose={() => setShowDemo(false)} />}
+
+      {showFinale && (
+        <SeasonFinaleModal
+          rotation={rotation}
+          weeks={weeks}
+          dutyStats={dutyStats}
+          legStats={legStats}
+          awards={awards}
+          streaks={streaks}
+          onClose={() => setShowFinale(false)}
+          onStartNew={archiveAndStartNew}
+        />
+      )}
+
+      {showArchiveList && (
+        <ArchiveListModal
+          archivedSeasons={archivedSeasons}
+          onClose={() => setShowArchiveList(false)}
+          onSelect={(season) => {
+            setViewingArchived(season);
+            setShowArchiveList(false);
+          }}
+        />
+      )}
+
+      {viewingArchived && (
+        <ArchivedSeasonModal season={viewingArchived} onClose={() => setViewingArchived(null)} />
+      )}
     </div>
   );
 }
@@ -1132,6 +1234,7 @@ function PlayerDetailModal({ player, weeks, dutyStats, legStats, onClose }) {
 function DemoPreview({ onClose }) {
   const { seasonStats, dutyStats, legStats, allSlips } = computeSeasonStats(DEMO_WEEKS);
   const awards = computeAwards(DEMO_WEEKS, allSlips, dutyStats, legStats);
+  const streaks = computeStreaks(DEMO_WEEKS, DEMO_ROTATION);
   const currentPlayer = DEMO_WEEKS[0].player;
   const nextIdx = (DEMO_ROTATION.indexOf(currentPlayer) + 1) % DEMO_ROTATION.length;
   const nextPlayer = DEMO_ROTATION[nextIdx];
@@ -1154,7 +1257,7 @@ function DemoPreview({ onClose }) {
           <RotationQueue currentPlayer={currentPlayer} nextPlayer={nextPlayer} rotation={DEMO_ROTATION} dutyStats={dutyStats} />
         </div>
 
-        <SeasonHighlights dutyStats={dutyStats} legStats={legStats} awards={awards} />
+        <SeasonHighlights dutyStats={dutyStats} legStats={legStats} awards={awards} streaks={streaks} />
 
         <section style={{ ...styles.statsStrip, marginBottom: 22 }}>
           <StatBlock label="Staked" value={fmt(seasonStats.totalStaked)} />
@@ -1339,7 +1442,7 @@ function AwardCard({ tint, label, value, sub }) {
   );
 }
 
-function SeasonHighlights({ dutyStats, legStats, awards }) {
+function SeasonHighlights({ dutyStats, legStats, awards, streaks }) {
   const cards = [
     {
       tint: "red",
@@ -1414,7 +1517,217 @@ function SeasonHighlights({ dutyStats, legStats, awards }) {
           <AwardCard key={c.label} {...c} />
         ))}
       </div>
+
+      {streaks && streaks.length > 0 && (
+        <>
+          <div style={{ ...styles.eyebrow, marginTop: 20 }}>ON FIRE</div>
+          <div style={styles.streakRow}>
+            {streaks.map((s) => (
+              <div
+                key={s.name}
+                style={{ ...styles.streakChip, background: s.type === "won" ? "#0B2545" : "#8C1C21" }}
+              >
+                <span style={styles.streakName}>{s.name}</span>
+                <span style={styles.streakDetail}>
+                  {s.count} week{s.count === 1 ? "" : "s"} {s.type === "won" ? "won" : "lost"} in a row
+                </span>
+              </div>
+            ))}
+          </div>
+        </>
+      )}
     </section>
+  );
+}
+
+// A slim row of dots, one per week, oldest to newest - the shape of the
+// season at a glance. Clicking a dot expands that week's card below.
+function SeasonTimeline({ weeks, expanded, onToggleWeek }) {
+  const ordered = [...weeks].reverse(); // weeks are stored newest-first
+  return (
+    <div style={styles.timelineWrap}>
+      <span style={styles.timelineLabel}>SEASON SHAPE</span>
+      <div style={styles.timelineRow}>
+        {ordered.map((w) => {
+          const outcome = weekOutcome(w);
+          const color = outcome === "won" ? "#0B2545" : outcome === "lost" ? "#C1272D" : "#C7CDD6";
+          return (
+            <button
+              key={w.id}
+              onClick={() => onToggleWeek(w.id)}
+              title={`WK ${w.weekNumber} · ${w.player} · ${outcome || "pending"}`}
+              style={{
+                ...styles.timelineDot,
+                background: color,
+                outline: expanded[w.id] ? "2px solid #0B2545" : "none",
+                outlineOffset: 2,
+              }}
+            />
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+// A dense, scannable table of every week - handy once there are more weeks
+// than anyone wants to scroll through one ticket card at a time.
+function WeeksOverviewTable({ weeks, onSelectWeek }) {
+  return (
+    <div style={styles.overviewTable}>
+      <div style={styles.overviewHead}>
+        <span>WK</span>
+        <span>DATE</span>
+        <span>PLAYER</span>
+        <span>MARKET</span>
+        <span style={{ textAlign: "right" }}>P/L</span>
+      </div>
+      {weeks.map((w) => {
+        const staked = w.slips.reduce((a, s) => a + s.stake, 0);
+        const returns = w.slips.reduce((a, s) => a + slipReturn(s), 0);
+        const profit = returns - staked;
+        const markets = w.slips.map((s) => marketLabel(s) || "not set").join(", ");
+        const outcome = weekOutcome(w);
+        return (
+          <button key={w.id} style={styles.overviewRow} onClick={() => onSelectWeek(w.id)}>
+            <span style={styles.overviewWk}>{w.weekNumber}</span>
+            <span style={styles.overviewDate}>{w.date}</span>
+            <span style={styles.overviewPlayer}>{w.player}</span>
+            <span style={styles.overviewMarket}>{markets}</span>
+            <span style={{ ...styles.overviewProfit, color: profit >= 0 ? "#0B2545" : "#C1272D" }}>
+              {profit >= 0 ? "+" : "−"}{fmt(Math.abs(profit))}
+              {outcome === null && w.slips.length > 0 && <Clock size={11} style={{ marginLeft: 4, verticalAlign: -1 }} />}
+            </span>
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+function SeasonFinaleModal({ rotation, weeks, dutyStats, legStats, awards, streaks, onClose, onStartNew }) {
+  const champion = dutyStats.find((p) => p.won + p.lost + p.pending > 0) || null;
+  const [confirming, setConfirming] = useState(false);
+
+  return (
+    <div style={styles.modalBackdrop} onClick={onClose}>
+      <div style={{ ...styles.modalPanel, maxWidth: 720 }} onClick={(e) => e.stopPropagation()}>
+        <div style={styles.modalHeader}>
+          <div>
+            <div style={styles.oddsSectionLabel}>SEASON FINALE</div>
+            <h2 style={styles.modalTitle}>
+              {champion && champion.profit > 0 ? `${champion.name} is your champion` : "Season wrap-up"}
+            </h2>
+          </div>
+          <button style={styles.iconBtnGhost} onClick={onClose} title="Close">
+            <X size={18} />
+          </button>
+        </div>
+
+        <div style={styles.modalHistoryLabel}>FINAL STANDINGS</div>
+        <div style={styles.leaderTable}>
+          {dutyStats.map((p, idx) => (
+            <div key={p.name} style={styles.leaderRow}>
+              <div style={styles.leaderRank}>{idx === 0 ? <Trophy size={16} color="#C1272D" /> : idx + 1}</div>
+              <div style={styles.leaderName}>{p.name}</div>
+              <div style={styles.leaderRecord}>{p.won}W – {p.lost}L</div>
+              <div style={{ ...styles.leaderProfit, color: "#FFFFFF" }}>
+                {p.profit >= 0 ? "+" : "−"}{fmt(Math.abs(p.profit))}
+              </div>
+            </div>
+          ))}
+        </div>
+
+        {streaks && streaks.length > 0 && (
+          <>
+            <div style={{ ...styles.modalHistoryLabel, marginTop: 20 }}>NOTABLE STREAKS</div>
+            <div style={styles.streakRow}>
+              {streaks.map((s) => (
+                <div key={s.name} style={{ ...styles.streakChip, background: s.type === "won" ? "#0B2545" : "#8C1C21" }}>
+                  <span style={styles.streakName}>{s.name}</span>
+                  <span style={styles.streakDetail}>{s.count} week{s.count === 1 ? "" : "s"} {s.type} in a row</span>
+                </div>
+              ))}
+            </div>
+          </>
+        )}
+
+        <div style={{ ...styles.modalHistoryLabel, marginTop: 20 }}>SEASON AWARDS</div>
+        <div style={styles.awardGrid}>
+          {[
+            { tint: "red", label: "HIGHEST ODDS BACKED", value: awards.highestOdds ? awards.highestOdds.player : "—", sub: awards.highestOdds ? awards.highestOdds.odds.toFixed(2) : "—" },
+            { tint: "navy", label: "MOST RISK-AVERSE", value: awards.safest ? awards.safest.name : "—", sub: awards.safest ? `avg ${awards.safest.avgOdds.toFixed(2)}` : "—" },
+            { tint: "grey", label: "BEST STRIKE RATE", value: awards.bestRate ? awards.bestRate.name : "—", sub: awards.bestRate ? `${awards.bestRate.accuracy.toFixed(0)}%` : "—" },
+          ].map((c) => (
+            <AwardCard key={c.label} {...c} />
+          ))}
+        </div>
+
+        {onStartNew && (
+          <div style={{ marginTop: 24, paddingTop: 18, borderTop: "1px dashed rgba(11,37,69,0.15)" }}>
+            {!confirming ? (
+              <button style={styles.primaryBtn} onClick={() => setConfirming(true)}>
+                <Trophy size={16} /> Archive this season &amp; start a new one
+              </button>
+            ) : (
+              <div style={styles.confirmBox}>
+                <span>This locks in the season's history and clears the board for a fresh randomiser. Sure?</span>
+                <div style={{ display: "flex", gap: 8 }}>
+                  <button style={styles.dangerBtn} onClick={onStartNew}>Yes, start fresh</button>
+                  <button style={styles.ghostBtn} onClick={() => setConfirming(false)}>Cancel</button>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function ArchiveListModal({ archivedSeasons, onClose, onSelect }) {
+  const ordered = [...archivedSeasons].reverse();
+  return (
+    <div style={styles.modalBackdrop} onClick={onClose}>
+      <div style={styles.modalPanel} onClick={(e) => e.stopPropagation()}>
+        <div style={styles.modalHeader}>
+          <h2 style={styles.modalTitle}>Past Seasons</h2>
+          <button style={styles.iconBtnGhost} onClick={onClose} title="Close">
+            <X size={18} />
+          </button>
+        </div>
+        <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+          {ordered.map((season, idx) => {
+            const { dutyStats } = computeSeasonStats(season.weeks);
+            const champion = dutyStats.find((p) => p.won + p.lost + p.pending > 0);
+            return (
+              <button key={season.id} style={styles.archiveRow} onClick={() => onSelect(season)}>
+                <span style={styles.archiveSeasonNum}>Season {archivedSeasons.length - idx}</span>
+                <span style={styles.archiveDate}>ended {new Date(season.endedAt).toLocaleDateString()}</span>
+                <span style={styles.archiveChampion}>{champion ? `🏆 ${champion.name}` : "no clear winner"}</span>
+              </button>
+            );
+          })}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ArchivedSeasonModal({ season, onClose }) {
+  const { dutyStats, legStats, allSlips } = computeSeasonStats(season.weeks);
+  const awards = computeAwards(season.weeks, allSlips, dutyStats, legStats);
+  const streaks = computeStreaks(season.weeks, season.rotation);
+  return (
+    <SeasonFinaleModal
+      rotation={season.rotation}
+      weeks={season.weeks}
+      dutyStats={dutyStats}
+      legStats={legStats}
+      awards={awards}
+      streaks={streaks}
+      onClose={onClose}
+    />
   );
 }
 
@@ -1890,7 +2203,7 @@ function OddsSection({ slip, rotation, allSubmitted, onUpdateFold, onUpdateSlip 
             ))}
           </select>
           <button
-            style={styles.confirmBtnRed}
+            style={styles.confirmBtn}
             onClick={() => onUpdateSlip({ confirmed: true, confirmedBy: confirmer, confirmedAt: Date.now() })}
           >
             <Lock size={13} /> Confirm bet placed
@@ -2299,6 +2612,17 @@ const styles = {
   awardLabel: { fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, fontWeight: 600, letterSpacing: 0.4, marginBottom: 6 },
   awardValue: { fontFamily: "'Work Sans', sans-serif", fontSize: 17, fontWeight: 600, color: "#101828" },
   awardSub: { fontFamily: "'Work Sans', sans-serif", fontSize: 12, color: "#4B5A72", marginTop: 1 },
+  streakRow: { display: "flex", gap: 10, flexWrap: "wrap", marginTop: 12 },
+  streakChip: {
+    borderRadius: 8,
+    padding: "10px 14px",
+    display: "flex",
+    flexDirection: "column",
+    gap: 2,
+    color: "#FFFFFF",
+  },
+  streakName: { fontFamily: "'Work Sans', sans-serif", fontSize: 14, fontWeight: 700 },
+  streakDetail: { fontFamily: "'Work Sans', sans-serif", fontSize: 11.5, opacity: 0.85 },
   statsStrip: {
     display: "grid",
     gridTemplateColumns: "repeat(auto-fit, minmax(130px, 1fr))",
@@ -2308,6 +2632,91 @@ const styles = {
     border: "1px solid rgba(193,39,45,0.2)",
   },
   statBlock: { background: "#0F2C52", color: "#FFFFFF", padding: "14px 16px" },
+  timelineWrap: {
+    display: "flex",
+    alignItems: "center",
+    gap: 12,
+    flexWrap: "wrap",
+    marginBottom: 18,
+    padding: "10px 14px",
+    background: "#F5F7FA",
+    border: "0.5px solid #E2E6ED",
+    borderRadius: 8,
+  },
+  timelineLabel: {
+    fontFamily: "'IBM Plex Mono', monospace",
+    fontSize: 10,
+    letterSpacing: 1,
+    color: "#8C97A8",
+    flexShrink: 0,
+  },
+  timelineRow: { display: "flex", gap: 6, flexWrap: "wrap" },
+  timelineDot: {
+    width: 14,
+    height: 14,
+    borderRadius: "50%",
+    border: "none",
+    cursor: "pointer",
+    padding: 0,
+  },
+  overviewTable: {
+    display: "flex",
+    flexDirection: "column",
+    gap: 1,
+    background: "rgba(11,37,69,0.1)",
+    border: "1px solid rgba(11,37,69,0.12)",
+    borderRadius: 8,
+    overflow: "hidden",
+    marginBottom: 18,
+    maxWidth: 820,
+  },
+  overviewHead: {
+    display: "grid",
+    gridTemplateColumns: "40px 90px 90px 1fr 90px",
+    gap: 10,
+    background: "#F5F7FA",
+    padding: "8px 14px",
+    fontFamily: "'IBM Plex Mono', monospace",
+    fontSize: 10,
+    letterSpacing: 0.5,
+    color: "#8C97A8",
+  },
+  overviewRow: {
+    display: "grid",
+    gridTemplateColumns: "40px 90px 90px 1fr 90px",
+    gap: 10,
+    alignItems: "center",
+    background: "#FFFFFF",
+    border: "none",
+    borderTop: "1px solid rgba(11,37,69,0.08)",
+    padding: "9px 14px",
+    cursor: "pointer",
+    textAlign: "left",
+    width: "100%",
+    fontFamily: "'Work Sans', sans-serif",
+    fontSize: 12.5,
+  },
+  overviewWk: { fontFamily: "'Teko', sans-serif", fontSize: 16, fontWeight: 600, color: "#14335E" },
+  overviewDate: { fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: "#4B5A72" },
+  overviewPlayer: { fontWeight: 700, color: "#101828" },
+  overviewMarket: { color: "#4B5A72", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" },
+  overviewProfit: { textAlign: "right", fontWeight: 700 },
+  archiveRow: {
+    display: "flex",
+    alignItems: "center",
+    gap: 14,
+    background: "#F5F7FA",
+    border: "1px solid rgba(11,37,69,0.12)",
+    borderRadius: 8,
+    padding: "12px 16px",
+    cursor: "pointer",
+    textAlign: "left",
+    width: "100%",
+    fontFamily: "'Work Sans', sans-serif",
+  },
+  archiveSeasonNum: { fontWeight: 700, fontSize: 14, color: "#0B2545" },
+  archiveDate: { fontSize: 12, color: "#4B5A72" },
+  archiveChampion: { fontSize: 13, fontWeight: 600, color: "#101828", marginLeft: "auto" },
   statLabel: {
     fontFamily: "'IBM Plex Mono', monospace",
     fontSize: 10,
@@ -2722,21 +3131,6 @@ const styles = {
     fontFamily: "'IBM Plex Mono', monospace",
     fontSize: 11,
     color: "#4B5A72",
-  },
-  confirmBtnRed: {
-    display: "flex",
-    alignItems: "center",
-    gap: 6,
-    background: "#C1272D",
-    color: "#FFFFFF",
-    border: "none",
-    borderRadius: 3,
-    padding: "7px 12px",
-    fontFamily: "'Work Sans', sans-serif",
-    fontSize: 12.5,
-    fontWeight: 700,
-    cursor: "pointer",
-    marginLeft: "auto",
   },
   confirmBtn: {
     display: "flex",
