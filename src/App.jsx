@@ -24,6 +24,7 @@ import {
   RefreshCw,
   Share2,
   ListChecks,
+  ArrowRight,
 } from "lucide-react";
 import { getSeason, setSeason, subscribeToSeason } from "./lib/storage";
 
@@ -1731,7 +1732,10 @@ function SlipBlock({ slip, index, rotation, weekDate, weekNumber, canDelete, onD
           style={styles.partialBtn}
           onClick={() => onUpdateSlip({ folds: slip.folds.filter((f) => f.submitted) })}
         >
-          Not everyone playing this week? Build the acca with these {submittedCount} pick{submittedCount === 1 ? "" : "s"}
+          <span style={styles.partialBtnLabel}>NOT EVERYONE PLAYING THIS WEEK?</span>
+          <span style={styles.partialBtnAction}>
+            Build the acca with these {submittedCount} pick{submittedCount === 1 ? "" : "s"} <ArrowRight size={14} />
+          </span>
         </button>
       )}
 
@@ -2553,33 +2557,33 @@ const styles = {
     flexWrap: "wrap",
   },
   partialBtn: {
-    display: "block",
+    display: "flex",
+    flexDirection: "column",
+    alignItems: "flex-start",
+    gap: 3,
     width: "100%",
     textAlign: "left",
-    background: "transparent",
-    border: "1px dashed rgba(11,37,69,0.3)",
-    borderRadius: 3,
-    padding: "7px 10px",
+    background: "#C1272D",
+    border: "none",
+    borderRadius: 6,
+    padding: "10px 14px",
     marginBottom: 8,
-    fontFamily: "'Work Sans', sans-serif",
-    fontSize: 12,
-    fontWeight: 600,
-    color: "#14335E",
     cursor: "pointer",
   },
-  partialConfirm: {
+  partialBtnLabel: {
+    fontFamily: "'IBM Plex Mono', monospace",
+    fontSize: 10,
+    letterSpacing: 0.5,
+    color: "#FCEBEB",
+  },
+  partialBtnAction: {
     display: "flex",
-    justifyContent: "space-between",
     alignItems: "center",
-    flexWrap: "wrap",
-    gap: 8,
-    background: "rgba(193,39,45,0.1)",
-    border: "1px solid rgba(193,39,45,0.35)",
-    borderRadius: 3,
-    padding: "8px 10px",
-    marginBottom: 8,
+    gap: 6,
     fontFamily: "'Work Sans', sans-serif",
-    fontSize: 12.5,
+    fontSize: 13.5,
+    fontWeight: 700,
+    color: "#FFFFFF",
   },
   foldCard: {
     border: "1px solid rgba(11,37,69,0.12)",
