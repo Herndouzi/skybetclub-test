@@ -1518,12 +1518,13 @@ function WeekCard({
             <Plus size={14} /> Add another acca this week
           </button>
 
+          <button style={styles.soloByPlayerBtnProminent} onClick={() => setShowWeekSolo(true)}>
+            <ListChecks size={16} /> Solo bets by player — see what each of you would've won alone
+          </button>
+
           <div style={styles.weekFooter}>
             <span>Week staked: <b>{fmt(weekStaked)}</b></span>
             <span>Returned: <b>{fmt(weekReturns)}</b></span>
-            <button style={styles.soloByPlayerBtn} onClick={() => setShowWeekSolo(true)}>
-              <ListChecks size={13} /> Solo bets by player
-            </button>
           </div>
         </div>
       )}
@@ -1610,6 +1611,31 @@ function SlipBlock({ slip, index, rotation, weekDate, weekNumber, canDelete, onD
   const locked = slip.confirmed;
   const [sharing, setSharing] = useState(false);
   const [showSolo, setShowSolo] = useState(false);
+  const [rolling, setRolling] = useState(false);
+  const [rollLabel, setRollLabel] = useState("");
+  const rollIntervalRef = useRef(null);
+
+  const handleRandomMarket = () => {
+    if (locked || rolling) return;
+    const pool = MARKET_OPTIONS.filter((m) => m !== "Other");
+    setRolling(true);
+    let ticks = 0;
+    rollIntervalRef.current = setInterval(() => {
+      setRollLabel(pool[Math.floor(Math.random() * pool.length)]);
+      ticks += 1;
+      if (ticks >= 16) {
+        clearInterval(rollIntervalRef.current);
+        const final = pool[Math.floor(Math.random() * pool.length)];
+        setRollLabel(final);
+        setTimeout(() => {
+          onUpdateSlip({ market: final });
+          setRolling(false);
+        }, 350);
+      }
+    }, 80);
+  };
+
+  useEffect(() => () => rollIntervalRef.current && clearInterval(rollIntervalRef.current), []);
 
   const handleShare = async () => {
     setSharing(true);
@@ -1657,18 +1683,27 @@ function SlipBlock({ slip, index, rotation, weekDate, weekNumber, canDelete, onD
 
       <div style={styles.marketBar}>
         <span style={styles.marketBarLabel}>This week's market:</span>
-        <select
-          value={slip.market}
-          onChange={(e) => onUpdateSlip({ market: e.target.value })}
-          style={styles.marketBarSelect}
-          disabled={locked}
-        >
-          <option value="">Choose a market…</option>
-          {MARKET_OPTIONS.map((m) => (
-            <option key={m} value={m}>{m}</option>
-          ))}
-        </select>
-        {slip.market === "Other" && (
+        {rolling ? (
+          <span style={styles.rollBanner}>{rollLabel || "…"}</span>
+        ) : (
+          <select
+            value={slip.market}
+            onChange={(e) => onUpdateSlip({ market: e.target.value })}
+            style={styles.marketBarSelect}
+            disabled={locked}
+          >
+            <option value="">Choose a market…</option>
+            {MARKET_OPTIONS.map((m) => (
+              <option key={m} value={m}>{m}</option>
+            ))}
+          </select>
+        )}
+        {!locked && (
+          <button style={styles.randomMarketBtn} onClick={handleRandomMarket} disabled={rolling} title="Randomise the market">
+            <Shuffle size={13} className={rolling ? "spin" : ""} />
+          </button>
+        )}
+        {slip.market === "Other" && !rolling && (
           <input
             placeholder="Custom market"
             value={slip.customMarket}
@@ -1677,7 +1712,7 @@ function SlipBlock({ slip, index, rotation, weekDate, weekNumber, canDelete, onD
             disabled={locked}
           />
         )}
-        {slip.market && (
+        {slip.market && !rolling && (
           <span style={styles.marketBarHint}>applies to every leg</span>
         )}
       </div>
@@ -1690,6 +1725,15 @@ function SlipBlock({ slip, index, rotation, weekDate, weekNumber, canDelete, onD
           <span style={{ opacity: 0.75 }}>· waiting on {waitingOn.join(", ")}</span>
         )}
       </div>
+
+      {!locked && submittedCount > 0 && submittedCount < slip.folds.length && (
+        <button
+          style={styles.partialBtn}
+          onClick={() => onUpdateSlip({ folds: slip.folds.filter((f) => f.submitted) })}
+        >
+          Not everyone playing this week? Build the acca with these {submittedCount} pick{submittedCount === 1 ? "" : "s"}
+        </button>
+      )}
 
       {slip.folds.map((fold, fi) => (
         <div key={fold.id} style={{ ...styles.foldCard, borderColor: fold.submitted ? "rgba(11,37,69,0.4)" : "rgba(11,37,69,0.12)" }}>
@@ -2475,6 +2519,31 @@ const styles = {
     color: "#14335E",
     fontStyle: "italic",
   },
+  rollBanner: {
+    flex: 1,
+    minWidth: 140,
+    fontFamily: "'Work Sans', sans-serif",
+    fontWeight: 700,
+    fontSize: 13,
+    padding: "6px 10px",
+    borderRadius: 3,
+    background: "#0B2545",
+    color: "#FFFFFF",
+    textAlign: "center",
+    letterSpacing: 0.3,
+  },
+  randomMarketBtn: {
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    background: "#C1272D",
+    border: "none",
+    borderRadius: 3,
+    color: "#FFFFFF",
+    padding: "7px 9px",
+    cursor: "pointer",
+    flexShrink: 0,
+  },
   submitBanner: {
     fontFamily: "'IBM Plex Mono', monospace",
     fontSize: 10.5,
@@ -2482,6 +2551,35 @@ const styles = {
     display: "flex",
     gap: 6,
     flexWrap: "wrap",
+  },
+  partialBtn: {
+    display: "block",
+    width: "100%",
+    textAlign: "left",
+    background: "transparent",
+    border: "1px dashed rgba(11,37,69,0.3)",
+    borderRadius: 3,
+    padding: "7px 10px",
+    marginBottom: 8,
+    fontFamily: "'Work Sans', sans-serif",
+    fontSize: 12,
+    fontWeight: 600,
+    color: "#14335E",
+    cursor: "pointer",
+  },
+  partialConfirm: {
+    display: "flex",
+    justifyContent: "space-between",
+    alignItems: "center",
+    flexWrap: "wrap",
+    gap: 8,
+    background: "rgba(193,39,45,0.1)",
+    border: "1px solid rgba(193,39,45,0.35)",
+    borderRadius: 3,
+    padding: "8px 10px",
+    marginBottom: 8,
+    fontFamily: "'Work Sans', sans-serif",
+    fontSize: 12.5,
   },
   foldCard: {
     border: "1px solid rgba(11,37,69,0.12)",
@@ -2775,6 +2873,24 @@ const styles = {
     fontSize: 12.5,
     fontFamily: "'Work Sans', sans-serif",
     opacity: 0.8,
+  },
+  soloByPlayerBtnProminent: {
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 8,
+    background: "#0B2545",
+    color: "#FFFFFF",
+    border: "none",
+    borderRadius: 6,
+    padding: "12px 16px",
+    fontFamily: "'Work Sans', sans-serif",
+    fontSize: 13.5,
+    fontWeight: 700,
+    cursor: "pointer",
+    width: "100%",
+    marginTop: 4,
+    marginBottom: 4,
   },
   soloByPlayerBtn: {
     display: "flex",
