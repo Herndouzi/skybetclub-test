@@ -1890,7 +1890,7 @@ function OddsSection({ slip, rotation, allSubmitted, onUpdateFold, onUpdateSlip 
             ))}
           </select>
           <button
-            style={styles.confirmBtn}
+            style={styles.confirmBtnRed}
             onClick={() => onUpdateSlip({ confirmed: true, confirmedBy: confirmer, confirmedAt: Date.now() })}
           >
             <Lock size={13} /> Confirm bet placed
@@ -2722,6 +2722,21 @@ const styles = {
     fontFamily: "'IBM Plex Mono', monospace",
     fontSize: 11,
     color: "#4B5A72",
+  },
+  confirmBtnRed: {
+    display: "flex",
+    alignItems: "center",
+    gap: 6,
+    background: "#C1272D",
+    color: "#FFFFFF",
+    border: "none",
+    borderRadius: 3,
+    padding: "7px 12px",
+    fontFamily: "'Work Sans', sans-serif",
+    fontSize: 12.5,
+    fontWeight: 700,
+    cursor: "pointer",
+    marginLeft: "auto",
   },
   confirmBtn: {
     display: "flex",
